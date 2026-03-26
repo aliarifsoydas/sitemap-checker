@@ -130,6 +130,24 @@ export const html = `<!DOCTYPE html>
   .results { display: none; max-width: 1280px; margin: 0 auto; padding: 0 24px 64px; }
   .results.on { display: block; }
 
+  /* ── Discovery info ── */
+  .discovery-info {
+    background: var(--accent-subtle);
+    border: 1px solid #c8dfe1;
+    border-radius: 6px;
+    padding: 10px 14px;
+    margin-bottom: 20px;
+    font-size: .84rem;
+    color: var(--accent);
+    line-height: 1.5;
+  }
+  .discovery-info code {
+    background: rgba(26,127,138,.1);
+    padding: 1px 5px;
+    border-radius: 3px;
+    font-size: .8rem;
+  }
+
   /* ── Numbers row ── */
   .numbers {
     display: flex;
@@ -337,12 +355,12 @@ export const html = `<!DOCTYPE html>
 
 <header>
   <h1>Sitemap Checker</h1>
-  <p>Paste a sitemap URL to crawl every sub-sitemap and check HTTP status codes.</p>
+  <p>Paste any URL &mdash; a sitemap.xml, a homepage, or even just a domain. We'll find the sitemaps automatically.</p>
 </header>
 
 <div class="search">
   <div class="search-row">
-    <input type="text" id="urlInput" placeholder="https://example.com/sitemap.xml" autofocus>
+    <input type="text" id="urlInput" placeholder="example.com or example.com/sitemap.xml" autofocus>
     <button id="crawlBtn" onclick="startCrawl()">Analyze</button>
   </div>
 </div>
@@ -356,6 +374,7 @@ export const html = `<!DOCTYPE html>
 
 <div class="results" id="results">
 
+  <div class="discovery-info" id="discoveryInfo" style="display:none"></div>
   <div class="numbers" id="numbers"></div>
 
   <details class="sitemap-list" id="smPanel" style="display:none">
@@ -494,6 +513,17 @@ function showResults(json){
   var entries=json.entries,sitemaps=json.sitemaps;
   var src={};
   entries.forEach(function(e){src[e.source]=(src[e.source]||0)+1});
+
+  // Show discovery info if sitemaps were auto-discovered
+  var df=json.discoveredFrom;
+  if(df&&df.length){
+    var inputUrl=$('urlInput').value.trim();
+    var isDirectXml=inputUrl.match(/\\.xml(\\?|$)/i);
+    if(!isDirectXml){
+      $('discoveryInfo').innerHTML='Found '+df.length+' sitemap'+(df.length>1?'s':'')+' from <code>'+inputUrl+'</code>: '+df.map(function(u){return'<code>'+u.split('/').pop()+'</code>'}).join(', ');
+      $('discoveryInfo').style.display='';
+    }else{$('discoveryInfo').style.display='none'}
+  }else{$('discoveryInfo').style.display='none'}
 
   $('numbers').innerHTML=
     num(entries.length,'','Total')+

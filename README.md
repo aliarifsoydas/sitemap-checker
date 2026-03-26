@@ -1,6 +1,6 @@
 # Sitemap Checker
 
-A fast, modern sitemap analysis tool that runs on [Cloudflare Workers](https://workers.cloudflare.com). Paste any XML sitemap URL to recursively crawl all sub-sitemaps, list every URL in a sortable table, and batch-check HTTP status codes in real time.
+A fast, modern sitemap analysis tool that runs on [Cloudflare Workers](https://workers.cloudflare.com). Paste any URL — a sitemap.xml, a homepage, or just a bare domain — and it will automatically discover sitemaps, crawl all sub-sitemaps, list every URL in a sortable table, and batch-check HTTP status codes in real time.
 
 ![Cloudflare Workers](https://img.shields.io/badge/Cloudflare-Workers-F38020?logo=cloudflare&logoColor=white)
 ![License](https://img.shields.io/badge/license-MIT-blue)
@@ -8,6 +8,13 @@ A fast, modern sitemap analysis tool that runs on [Cloudflare Workers](https://w
 ---
 
 ## Features
+
+### Auto-Discovery
+You don't need to know where the sitemap lives. Just enter `example.com` and the tool will:
+1. Check if the URL itself returns XML
+2. Parse the homepage HTML for `<link rel="sitemap">` tags
+3. Fetch `/robots.txt` and read `Sitemap:` directives
+4. Try common paths: `/sitemap.xml`, `/wp-sitemap.xml`, `/sitemap_index.xml`, etc.
 
 ### Sitemap Crawling
 - Recursively resolves **sitemap index** files and all nested sub-sitemaps (up to 3 levels deep)
@@ -157,12 +164,21 @@ sitemap-checker/
 ## How It Works
 
 ```
-User enters sitemap URL
+User enters any URL (homepage, domain, or sitemap.xml)
         │
         ▼
   ┌─────────────┐
-  │  /api/crawl  │   Worker fetches the XML
+  │  /api/crawl  │
   └──────┬──────┘
+         │
+         ▼
+  ┌──────────────────┐
+  │ discoverSitemaps  │  Is it XML? Check <link> tags?
+  │                   │  Parse robots.txt? Try common paths?
+  └────────┬─────────┘
+           │ returns sitemap URL(s)
+           ▼
+  For each discovered sitemap:
          │
          ▼
   Is it a <sitemapindex>?
@@ -176,7 +192,7 @@ User enters sitemap URL
      │          │
      └────┬─────┘
           ▼
-   Return all entries as JSON
+   Return all entries + discovery info
           │
           ▼
    Frontend renders table
@@ -185,12 +201,11 @@ User enters sitemap URL
    User clicks "Check Status"
           │
           ▼
-  ┌────────────────┐
-  │ /api/check-status │  Worker sends HEAD requests
-  └───────┬────────┘     in batches of 10
-          │
-          ▼
-   Status badges update in real time
+  ┌────────────────────┐
+  │  /api/check-status  │  HEAD requests in batches of 10
+  └────────┬───────────┘
+           ▼
+   Status updates in real time
 ```
 
 ---

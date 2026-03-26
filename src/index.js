@@ -52,7 +52,7 @@ function basename(url) {
 
 // ── Sitemap fetching & parsing ──────────────────────────────────────────────
 
-async function fetchXml(url) {
+async function fetchText(url) {
   const resp = await fetch(url, {
     headers: { "User-Agent": "SitemapChecker/1.0" },
     redirect: "follow",
@@ -61,10 +61,91 @@ async function fetchXml(url) {
   return await resp.text();
 }
 
+function looksLikeXml(text) {
+  const trimmed = text.trimStart().substring(0, 200);
+  return trimmed.startsWith("<?xml") || /<(urlset|sitemapindex)[\s>]/i.test(trimmed);
+}
+
+// ── Sitemap discovery from any URL ──────────────────────────────────────────
+
+async function discoverSitemaps(inputUrl) {
+  const origin = new URL(inputUrl).origin;
+  const found = [];
+
+  // 1. Check if the URL itself is already XML
+  try {
+    const text = await fetchText(inputUrl);
+    if (looksLikeXml(text)) return [inputUrl];
+  } catch {}
+
+  // 2. Parse HTML for <link rel="sitemap"> tags
+  try {
+    const html = await fetchText(inputUrl);
+    const linkRe = /<link[^>]*rel=["']sitemap["'][^>]*>/gi;
+    let m;
+    while ((m = linkRe.exec(html)) !== null) {
+      const href = m[0].match(/href=["']([^"']+)["']/i);
+      if (href) {
+        const resolved = href[1].startsWith("http") ? href[1] : origin + (href[1].startsWith("/") ? "" : "/") + href[1];
+        found.push(resolved);
+      }
+    }
+  } catch {}
+
+  // 3. Parse robots.txt for Sitemap: directives
+  try {
+    const robots = await fetchText(origin + "/robots.txt");
+    const lines = robots.split("\n");
+    for (const line of lines) {
+      const match = line.match(/^\s*sitemap:\s*(.+)/i);
+      if (match) found.push(match[1].trim());
+    }
+  } catch {}
+
+  // 4. Try common sitemap paths
+  const commonPaths = [
+    "/sitemap.xml",
+    "/sitemap_index.xml",
+    "/sitemap/sitemap.xml",
+    "/wp-sitemap.xml",
+    "/sitemap/",
+    "/sitemaps/sitemap.xml",
+  ];
+
+  // Deduplicate what we already found before brute-forcing
+  const seen = new Set(found.map((u) => u.toLowerCase()));
+
+  for (const path of commonPaths) {
+    const candidate = origin + path;
+    if (seen.has(candidate.toLowerCase())) continue;
+    try {
+      const text = await fetchText(candidate);
+      if (looksLikeXml(text)) {
+        found.push(candidate);
+        break; // one hit is enough from guessing
+      }
+    } catch {}
+  }
+
+  if (!found.length) {
+    throw new Error(
+      "No sitemap found. Checked HTML <link> tags, robots.txt, and common paths like /sitemap.xml"
+    );
+  }
+
+  // Deduplicate
+  return [...new Set(found)];
+}
+
 async function parseSitemap(url, depth = 0, maxDepth = 3) {
   if (depth > maxDepth) return { entries: [], sitemaps: [] };
 
-  const xml = await fetchXml(url);
+  let xml;
+  try {
+    xml = await fetchText(url);
+  } catch {
+    return { entries: [], sitemaps: [] };
+  }
   const isSitemapIndex = /<sitemapindex[\s>]/i.test(xml);
 
   let entries = [];
@@ -155,8 +236,30 @@ export default {
         }
         if (!targetUrl.startsWith("http")) targetUrl = "https://" + targetUrl;
 
-        const { entries, sitemaps } = await parseSitemap(targetUrl);
-        return Response.json({ entries, sitemaps, total: entries.length }, { headers: corsHeaders });
+        // Discover sitemaps if URL doesn't look like an XML file
+        const sitemapUrls = await discoverSitemaps(targetUrl);
+
+        // Crawl all discovered sitemaps and merge results
+        let allEntries = [];
+        let allSitemaps = [];
+        for (const smUrl of sitemapUrls) {
+          const { entries, sitemaps } = await parseSitemap(smUrl);
+          allEntries = allEntries.concat(entries);
+          allSitemaps = allSitemaps.concat(sitemaps);
+        }
+
+        // Add root-level discovered sitemaps to the list if they aren't already there
+        const knownUrls = new Set(allSitemaps.map((s) => s.url));
+        for (const smUrl of sitemapUrls) {
+          if (!knownUrls.has(smUrl)) {
+            allSitemaps.unshift({ url: smUrl, lastmod: "-", discovered: true });
+          }
+        }
+
+        return Response.json(
+          { entries: allEntries, sitemaps: allSitemaps, total: allEntries.length, discoveredFrom: sitemapUrls },
+          { headers: corsHeaders }
+        );
       } catch (e) {
         return Response.json({ error: e.message }, { status: 500, headers: corsHeaders });
       }
