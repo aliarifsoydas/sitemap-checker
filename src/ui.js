@@ -267,11 +267,19 @@ export const html = `<!DOCTYPE html>
     overflow: hidden;
     background: var(--surface);
   }
-  .table-scroll { overflow-x: auto; }
+  .table-scroll { overflow: auto; max-height: calc(100vh - 200px); }
   table { width: 100%; border-collapse: collapse; }
-  thead { background: var(--surface-alt); }
+  thead { background: var(--surface-alt); position: sticky; top: 0; z-index: 2; }
+  thead::after {
+    content: '';
+    position: absolute;
+    left: 0; right: 0; bottom: 0;
+    height: 1px;
+    background: var(--border);
+  }
   th {
     padding: 10px 14px;
+    background: var(--surface-alt);
     text-align: left;
     font-weight: 600;
     font-size: .72rem;
@@ -295,7 +303,7 @@ export const html = `<!DOCTYPE html>
   tbody tr:last-child td { border-bottom: none; }
   tbody tr:hover { background: var(--surface-alt); }
 
-  .url-td { max-width: 460px; word-break: break-all; }
+  .url-td { white-space: nowrap; }
   .url-td a { color: var(--accent); text-decoration: none; }
   .url-td a:hover { text-decoration: underline; }
 
