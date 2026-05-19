@@ -400,6 +400,7 @@ export const html = `<!DOCTYPE html>
       <option value="pending">Unchecked</option>
     </select>
     <button class="tbtn tbtn-accent" id="stBtn" onclick="checkAll()">Check status</button>
+    <button class="tbtn tbtn-accent" id="metaBtn" onclick="checkMeta()">Check meta</button>
     <button class="tbtn" onclick="copyUrls()">Copy</button>
     <button class="tbtn" onclick="exportCSV()">CSV</button>
     <span class="count" id="countLabel"></span>
@@ -417,6 +418,11 @@ export const html = `<!DOCTYPE html>
           <th onclick="sortBy(5)">Priority<span class="arr"></span></th>
           <th onclick="sortBy(6)">Img<span class="arr"></span></th>
           <th onclick="sortBy(7)">Lang<span class="arr"></span></th>
+          <th onclick="sortBy(8)">Title<span class="arr"></span></th>
+          <th onclick="sortBy(9)">Description<span class="arr"></span></th>
+          <th onclick="sortBy(10)">H1<span class="arr"></span></th>
+          <th onclick="sortBy(11)">Robots<span class="arr"></span></th>
+          <th onclick="sortBy(12)">Canonical<span class="arr"></span></th>
         </tr></thead>
         <tbody id="tbody"></tbody>
       </table>
@@ -429,7 +435,7 @@ export const html = `<!DOCTYPE html>
 </footer>
 
 <script>
-var DATA=[], SM={}, sortCol=-1, sortAsc=true;
+var DATA=[], SM={}, META={}, sortCol=-1, sortAsc=true;
 var $=function(id){return document.getElementById(id)};
 
 $('urlInput').addEventListener('keydown',function(e){if(e.key==='Enter')startCrawl()});
@@ -440,7 +446,7 @@ async function startCrawl(){
   off('error');off('results');off('pbar');
   on('loader');
   $('crawlBtn').disabled=true;
-  SM={};
+  SM={};META={};
   try{
     var r=await fetch('/api/crawl',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({url:url})});
     var j=await r.json();
@@ -496,6 +502,42 @@ async function checkAll(){
   }
   btn.disabled=false;btn.textContent='Check status';
   setTimeout(function(){off('pbar')},1500);
+}
+
+async function checkMeta(){
+  var btn=$('metaBtn');
+  btn.disabled=true;btn.textContent='Checking...';
+  on('pbar');
+  var urls=DATA.map(function(e){return e.url});
+  var batch=20,done=0;
+  for(var i=0;i<urls.length;i+=batch){
+    var chunk=urls.slice(i,i+batch);
+    try{
+      var r=await fetch('/api/check-meta',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({urls:chunk})});
+      var j=await r.json();
+      if(j.results)j.results.forEach(function(x){META[x.url]=x;if(x.status)SM[x.url]=x.status});
+    }catch(e){}
+    done+=chunk.length;
+    $('pFill').style.width=Math.min(100,Math.round(done/urls.length*100))+'%';
+    $('pText').textContent=done+' / '+urls.length;
+    renderTable(filtered());
+  }
+  btn.disabled=false;btn.textContent='Check meta';
+  setTimeout(function(){off('pbar')},1500);
+}
+
+function esc(s){if(s==null)return'';return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;')}
+function truncate(s,n){if(!s)return'';return s.length>n?s.substring(0,n)+'…':s}
+function metaCell(url,key){
+  var m=META[url];if(!m)return'<span style="color:var(--text-muted)">&mdash;</span>';
+  var v=m[key];if(v==null||v==='')return'<span style="color:var(--red)">missing</span>';
+  return'<span title="'+esc(v)+'">'+esc(truncate(v,60))+'</span>';
+}
+function h1Cell(url){
+  var m=META[url];if(!m)return'<span style="color:var(--text-muted)">&mdash;</span>';
+  if(!m.h1)return'<span style="color:var(--red)">missing</span>';
+  var extra=m.h1Count>1?' <span style="color:var(--amber)">('+m.h1Count+')</span>':'';
+  return'<span title="'+esc(m.h1)+'">'+esc(truncate(m.h1,60))+'</span>'+extra;
 }
 
 function updateNums(){
@@ -562,7 +604,7 @@ function applyFilters(){renderTable(filtered())}
 
 function sortBy(col){
   if(sortCol===col)sortAsc=!sortAsc;else{sortCol=col;sortAsc=true}
-  var keys=[null,'url','_st','source','lastmod','priority','images','hreflangs'];
+  var keys=[null,'url','_st','source','lastmod','priority','images','hreflangs','_title','_desc','_h1','_robots','_canon'];
   var key=keys[col];if(!key)return;
   var d=filtered();
   d.sort(function(a,b){
@@ -570,6 +612,11 @@ function sortBy(col){
     if(key==='_st'){va=SM[a.url]||999;vb=SM[b.url]||999}
     else if(key==='images'){va=a.images;vb=b.images}
     else if(key==='hreflangs'){va=(a.hreflangs||[]).length;vb=(b.hreflangs||[]).length}
+    else if(key==='_title'){va=(META[a.url]||{}).title||'';vb=(META[b.url]||{}).title||''}
+    else if(key==='_desc'){va=(META[a.url]||{}).description||'';vb=(META[b.url]||{}).description||''}
+    else if(key==='_h1'){va=(META[a.url]||{}).h1||'';vb=(META[b.url]||{}).h1||''}
+    else if(key==='_robots'){va=(META[a.url]||{}).robots||'';vb=(META[b.url]||{}).robots||''}
+    else if(key==='_canon'){va=(META[a.url]||{}).canonical||'';vb=(META[b.url]||{}).canonical||''}
     else{va=a[key]||'';vb=b[key]||''}
     if(typeof va==='number')return sortAsc?va-vb:vb-va;
     return sortAsc?String(va).localeCompare(String(vb)):String(vb).localeCompare(String(va));
@@ -584,7 +631,7 @@ function sortBy(col){
 
 function renderTable(d){
   var tb=$('tbody');
-  if(!d.length){tb.innerHTML='<tr class="empty"><td colspan="8">No results</td></tr>';$('countLabel').textContent='0';return}
+  if(!d.length){tb.innerHTML='<tr class="empty"><td colspan="13">No results</td></tr>';$('countLabel').textContent='0';return}
   tb.innerHTML=d.map(function(e,i){
     var langs=(e.hreflangs||[]).map(function(h){return'<span class="lang-tag">'+h.lang+'</span>'}).join('');
     return'<tr>'+
@@ -596,6 +643,11 @@ function renderTable(d){
       '<td>'+e.priority+'</td>'+
       '<td>'+(e.images>0?e.images:'-')+'</td>'+
       '<td>'+(langs||'-')+'</td>'+
+      '<td>'+metaCell(e.url,'title')+'</td>'+
+      '<td>'+metaCell(e.url,'description')+'</td>'+
+      '<td>'+h1Cell(e.url)+'</td>'+
+      '<td>'+metaCell(e.url,'robots')+'</td>'+
+      '<td>'+metaCell(e.url,'canonical')+'</td>'+
     '</tr>';
   }).join('');
   $('countLabel').textContent=d.length+' / '+DATA.length;
@@ -611,10 +663,12 @@ function copyUrls(){
 }
 
 function exportCSV(){
-  var rows=[['URL','Status','Source','Last Modified','Changefreq','Priority','Images','Hreflang']];
+  var rows=[['URL','Status','Source','Last Modified','Changefreq','Priority','Images','Hreflang','Title','Description','H1','H1 Count','Robots','Canonical']];
   filtered().forEach(function(e){
+    var m=META[e.url]||{};
     rows.push([e.url,SM[e.url]!==undefined?SM[e.url]:'',e.source,e.lastmod,e.changefreq,e.priority,e.images,
-      (e.hreflangs||[]).map(function(h){return h.lang}).join(';')]);
+      (e.hreflangs||[]).map(function(h){return h.lang}).join(';'),
+      m.title||'',m.description||'',m.h1||'',m.h1Count!=null?m.h1Count:'',m.robots||'',m.canonical||'']);
   });
   var csv=rows.map(function(r){return r.map(function(c){return'"'+String(c).replace(/"/g,'""')+'"'}).join(',')}).join('\\n');
   var blob=new Blob(['\\uFEFF'+csv],{type:'text/csv;charset=utf-8'});

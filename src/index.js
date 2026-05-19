@@ -209,6 +209,86 @@ async function checkUrlStatus(url) {
   }
 }
 
+// ── Meta tag extraction ─────────────────────────────────────────────────────
+
+function decodeEntities(s) {
+  if (!s) return s;
+  return s
+    .replace(/&amp;/g, "&")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/&nbsp;/g, " ")
+    .replace(/&#(\d+);/g, (_, n) => String.fromCharCode(parseInt(n, 10)))
+    .replace(/&#x([0-9a-f]+);/gi, (_, n) => String.fromCharCode(parseInt(n, 16)));
+}
+
+function stripTags(s) {
+  return s.replace(/<[^>]+>/g, "").replace(/\s+/g, " ").trim();
+}
+
+function getMetaContent(html, nameOrProp) {
+  // matches <meta name="X" content="Y"> or content first then name, case-insensitive
+  const re = new RegExp(
+    `<meta\\b[^>]*?\\b(?:name|property)\\s*=\\s*["']${nameOrProp}["'][^>]*?>`,
+    "i"
+  );
+  const tag = html.match(re);
+  if (!tag) return null;
+  const c = tag[0].match(/\bcontent\s*=\s*["']([^"']*)["']/i);
+  return c ? decodeEntities(c[1].trim()) : null;
+}
+
+function getLinkHref(html, rel) {
+  const re = new RegExp(`<link\\b[^>]*?\\brel\\s*=\\s*["']${rel}["'][^>]*?>`, "i");
+  const tag = html.match(re);
+  if (!tag) return null;
+  const h = tag[0].match(/\bhref\s*=\s*["']([^"']*)["']/i);
+  return h ? h[1].trim() : null;
+}
+
+async function checkUrlMeta(url) {
+  try {
+    const resp = await fetch(url, {
+      headers: { "User-Agent": "SitemapChecker/1.0" },
+      redirect: "follow",
+    });
+    const status = resp.status;
+    if (!resp.ok) return { url, status, title: null, description: null, h1: null, h1Count: 0, robots: null, canonical: null };
+    const html = await resp.text();
+    // Limit to <head>+early body for speed; but h1 may be later. Cap to 500KB.
+    const capped = html.length > 500_000 ? html.slice(0, 500_000) : html;
+
+    const titleMatch = capped.match(/<title[^>]*>([\s\S]*?)<\/title>/i);
+    const title = titleMatch ? decodeEntities(stripTags(titleMatch[1])) : null;
+
+    const description = getMetaContent(capped, "description");
+    const robots = getMetaContent(capped, "robots");
+    const canonical = getLinkHref(capped, "canonical");
+
+    const h1Re = /<h1\b[^>]*>([\s\S]*?)<\/h1>/gi;
+    const h1s = [];
+    let mm;
+    while ((mm = h1Re.exec(capped)) !== null) {
+      h1s.push(decodeEntities(stripTags(mm[1])));
+    }
+
+    return {
+      url,
+      status,
+      title,
+      description,
+      h1: h1s[0] || null,
+      h1Count: h1s.length,
+      robots,
+      canonical,
+    };
+  } catch (e) {
+    return { url, status: 0, error: e.message, title: null, description: null, h1: null, h1Count: 0, robots: null, canonical: null };
+  }
+}
+
 // ── Worker entry ────────────────────────────────────────────────────────────
 
 export default {
@@ -283,6 +363,27 @@ export default {
           results.push(...batchResults);
         }
 
+        return Response.json({ results }, { headers: corsHeaders });
+      } catch (e) {
+        return Response.json({ error: e.message }, { status: 500, headers: corsHeaders });
+      }
+    }
+
+    // ── API: Check meta tags (batch) ──
+    if (url.pathname === "/api/check-meta" && request.method === "POST") {
+      try {
+        const body = await request.json();
+        const urls = body.urls || [];
+        if (!urls.length) {
+          return Response.json({ error: "URL list is required" }, { status: 400, headers: corsHeaders });
+        }
+        const batchSize = 8;
+        const results = [];
+        for (let i = 0; i < urls.length; i += batchSize) {
+          const batch = urls.slice(i, i + batchSize);
+          const batchResults = await Promise.all(batch.map(checkUrlMeta));
+          results.push(...batchResults);
+        }
         return Response.json({ results }, { headers: corsHeaders });
       } catch (e) {
         return Response.json({ error: e.message }, { status: 500, headers: corsHeaders });
